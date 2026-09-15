@@ -1,0 +1,13 @@
+/target
+engine/target
+app/build
+build/
+rust-target/
+*.o
+*.so
+*.dll
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+.selftest*

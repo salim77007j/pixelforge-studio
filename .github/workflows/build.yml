@@ -1,0 +1,138 @@
+name: Build PixelForge Studio
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6 & build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qt6-base-dev qt6-base-dev-tools libgl1-mesa-dev libglx-mesa0 \
+            cmake ninja-build build-essential xvfb \
+            libxcb-cursor0 libxkbcommon-x11-0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust engine tests
+        working-directory: engine
+        run: cargo test --release
+
+      - name: Configure
+        run: |
+          cmake -B build -S app -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake/Qt6"
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Run engine + UI self-test (Xvfb)
+        env:
+          QT_QPA_PLATFORM: xcb
+          PF_DESIGN_IMAGE: ${{ github.workspace }}/assets/design.jpg
+        run: |
+          set -e
+          mkdir -p artifacts/selftest
+          xvfb-run -a -s "-screen 0 1600x960x24" ./build/PixelForge --selftest artifacts/selftest | tee artifacts/selftest-log.txt
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: Bundle Linux app (binary + engine + Qt libs)
+        run: |
+          set -e
+          mkdir -p dist/PixelForge
+          cp build/PixelForge dist/PixelForge/
+          cp build/libpfengine.so dist/PixelForge/
+          # gather Qt runtime dependencies
+          ldd dist/PixelForge/PixelForge | awk '{print $3}' | grep -E 'Qt6|libEGL|libGL|libxkb|libxcb|libicu|libdouble' | while read -r so; do
+            [ -f "$so" ] && cp "$so" dist/PixelForge/ || true
+          done
+          cat > dist/PixelForge/run.sh <<'SH'
+          #!/bin/sh
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR:$LD_LIBRARY_PATH"
+          export QT_PLUGIN_PATH="$DIR/plugins"
+          exec "$DIR/PixelForge" "$@"
+          SH
+          chmod +x dist/PixelForge/run.sh
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/platforms dist/PixelForge/plugins/ 2>/dev/null || true
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats dist/PixelForge/plugins/ 2>/dev/null || true
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/iconengines dist/PixelForge/plugins/ 2>/dev/null || true
+          tar -czf PixelForge-linux-x64.tar.gz -C dist PixelForge
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelForge-linux-x64
+          path: |
+            PixelForge-linux-x64.tar.gz
+          retention-days: 30
+
+      - name: Upload self-test evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelForge-selftest-linux
+          path: |
+            artifacts/selftest
+            artifacts/selftest-log.txt
+          retention-days: 30
+
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6.8.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Rust engine tests
+        working-directory: engine
+        shell: cmd
+        run: cargo test --release
+
+      - name: Configure & Build
+        shell: cmd
+        run: |
+          cmake -B build -S app -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Deploy Qt runtime (windeployqt)
+        shell: cmd
+        run: |
+          mkdir dist
+          xcopy build\Release\PixelForge.exe dist\ /Y
+          xcopy build\Release\pfengine.dll dist\ /Y || xcopy build\pfengine.dll dist\ /Y || copy build\rust-target\release\pfengine.dll dist\ /Y
+          windeployqt --release --no-translations --compiler-runtime dist\PixelForge.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelForge-windows-x64
+          path: dist
+          retention-days: 30
