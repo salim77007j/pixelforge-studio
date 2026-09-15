@@ -31,12 +31,23 @@ else()
   set(ENGINE_LIB ${RUST_TARGET_DIR}/release/lib${ENGINE_LIB_NAME}.so)
 endif()
 
-add_custom_target(pfengine_build
-  COMMAND ${CARGO_EXECUTABLE} build --release --manifest-path ${ENGINE_DIR}/Cargo.toml --target-dir ${RUST_TARGET_DIR}
-  BYPRODUCTS ${RUST_TARGET_DIR}/release
-  WORKING_DIRECTORY ${ENGINE_DIR}
-  VERBATIM
-  COMMENT "Building Rust engine (release)...")
+# OUTPUT-based custom command: Ninja/MSBuild get a real rule to build the engine lib
+if(WIN32)
+  add_custom_command(
+    OUTPUT ${ENGINE_DLL} ${ENGINE_IMPLIB}
+    COMMAND ${CARGO_EXECUTABLE} build --release --manifest-path ${ENGINE_DIR}/Cargo.toml --target-dir ${RUST_TARGET_DIR}
+    WORKING_DIRECTORY ${ENGINE_DIR}
+    VERBATIM
+    COMMENT "Building Rust engine (release)...")
+else()
+  add_custom_command(
+    OUTPUT ${ENGINE_LIB}
+    COMMAND ${CARGO_EXECUTABLE} build --release --manifest-path ${ENGINE_DIR}/Cargo.toml --target-dir ${RUST_TARGET_DIR}
+    WORKING_DIRECTORY ${ENGINE_DIR}
+    VERBATIM
+    COMMENT "Building Rust engine (release)...")
+endif()
+add_custom_target(pfengine_build ALL DEPENDS ${ENGINE_LIB} ${ENGINE_DLL} ${ENGINE_IMPLIB})
 
 # ---------------- Qt ----------------
 find_package(Qt6 REQUIRED COMPONENTS Widgets)

@@ -1204,9 +1204,10 @@ void MainWindow::filterTwirl() {
     if (!tab) return;
     uint32_t w, h;
     tab->m_doc.size(w, h);
+    double maxdim = (double)qMax(w, h);
     AdjustDialog dlg(this, tab, tr("Twirl"),
-        {{"Angle (°)", -720, 720, 5, 90, 0, true},
-         {"Radius (px)", 10, qMax(w, h), 10, qMax(w, h) * 0.7, 0, true}},
+        {{"Angle (°)", -720.0, 720.0, 5.0, 90.0, 0, true},
+         {"Radius (px)", 10.0, maxdim, 10.0, maxdim * 0.7, 0, true}},
         [](EditorTab *t, const QVector<double> &v) {
             pf_filter_twirl(t->m_doc.handle(), v[0], v[1]);
         });
