@@ -55,7 +55,7 @@ jobs:
           cp build/PixelForge dist/PixelForge/
           cp build/libpfengine.so dist/PixelForge/
           # gather Qt runtime dependencies
-          ldd dist/PixelForge/PixelForge | awk '{print $3}' | grep -E 'Qt6|libEGL|libGL|libxkb|libxcb|libicu|libdouble' | while read -r so; do
+          ldd dist/PixelForge/PixelForge | awk '{print $3}' | grep -E 'Qt6|libEGL|libOpenGL|libGL|libglapi|libxkb|libxcb|libicu|libdouble|libmd4c|libb2|libgrapheme' | while read -r so; do
             [ -f "$so" ] && cp "$so" dist/PixelForge/ || true
           done
           cat > dist/PixelForge/run.sh <<'SH'
