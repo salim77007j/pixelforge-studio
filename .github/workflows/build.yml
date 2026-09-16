@@ -66,6 +66,7 @@ jobs:
           exec "$DIR/PixelForge" "$@"
           SH
           chmod +x dist/PixelForge/run.sh
+          mkdir -p dist/PixelForge/plugins
           cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/platforms dist/PixelForge/plugins/ 2>/dev/null || true
           cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats dist/PixelForge/plugins/ 2>/dev/null || true
           cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/iconengines dist/PixelForge/plugins/ 2>/dev/null || true
