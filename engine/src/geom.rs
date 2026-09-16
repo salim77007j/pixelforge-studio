@@ -27,9 +27,10 @@ impl Mat3 {
     pub fn identity() -> Self {
         Mat3 { m: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] }
     }
-    /// Affine 2x3 (a b c d tx ty) — note: c = tx column.
-    pub fn affine(a: f64, b: f64, c: f64, d: f64, tx: f64, ty: f64) -> Self {
-        Mat3 { m: [a, b, tx, c, d, ty, 0.0, 0.0, 1.0] }
+    /// Affine in the (a b c d e f) convention used by the C API and Cairo/
+    /// Canvas transforms:  x' = a·x + c·y + e ;  y' = b·x + d·y + f
+    pub fn affine(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
+        Mat3 { m: [a, c, e, b, d, f, 0.0, 0.0, 1.0] }
     }
     pub fn mul(&self, o: &Mat3) -> Mat3 {
         let mut r = [0f64; 9];
@@ -83,10 +84,10 @@ pub fn homography_from_corners(corners: &[(f64, f64); 4]) -> Mat3 {
     let sx = x0 - x1 + x2 - x3;
     let sy = y0 - y1 + y2 - y3;
     if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
-        // affine
+        // affine: unit square -> parallelogram
+        // x' = x0 + (x1-x0)u + (x3-x0)v ; y' = y0 + (y1-y0)u + (y3-y0)v
         return Mat3::affine(
-            x1 - x0, x3 - x0, x0,
-            y1 - y0, y3 - y0, y0,
+            x1 - x0, y1 - y0, x3 - x0, y3 - y0, x0, y0,
         );
     }
     let dx1 = x1 - x2;
@@ -95,7 +96,7 @@ pub fn homography_from_corners(corners: &[(f64, f64); 4]) -> Mat3 {
     let dy2 = y3 - y2;
     let denom = dx1 * dy2 - dx2 * dy1;
     if denom.abs() < 1e-12 {
-        return Mat3::affine(x1 - x0, x3 - x0, x0, y1 - y0, y3 - y0, y0);
+        return Mat3::affine(x1 - x0, y1 - y0, x3 - x0, y3 - y0, x0, y0);
     }
     let g = (sx * dy2 - sy * dx2) / denom;
     let h = (sy * dx1 - sx * dy1) / denom;
@@ -220,17 +221,33 @@ pub fn resize_buffer(src: &PixelBuffer, nw: u32, nh: u32, r: Resample) -> Result
 
 /// Transform a layer's pixels with an affine matrix (doc-space), baking offsets.
 pub fn layer_affine(doc: &mut Document, layer_id: u64, m: &Mat3, r: Resample) -> Result<(), String> {
-    let (w, h) = (doc.w, doc.h);
     let layer = doc.root.find(layer_id).ok_or("layer not found")?;
     if layer.kind != LayerKind::Raster { return Err("cannot transform a group".into()); }
     let src = layer.pixels.as_ref().ok_or("no pixels")?.as_ref().clone();
     let (lx, ly) = (layer.x, layer.y);
     let inv = m.inverse().ok_or("singular transform")?;
-    let mut out = PixelBuffer::new(w, h, [0, 0, 0, 0])?;
-    for y in 0..h {
-        for x in 0..w {
+    // Rasterize into the TIGHT bounding box of the transformed layer rect
+    // (not the whole canvas): keeps layers lean, offsets meaningful, and the
+    // document identical visually.
+    let (sw, sh) = (src.w as f64, src.h as f64);
+    let corners = [
+        m.apply(lx as f64, ly as f64),
+        m.apply(lx as f64 + sw, ly as f64),
+        m.apply(lx as f64 + sw, ly as f64 + sh),
+        m.apply(lx as f64, ly as f64 + sh),
+    ];
+    let minx = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i64;
+    let maxx = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i64;
+    let miny = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i64;
+    let maxy = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i64;
+    let bw = (maxx - minx).max(0) as u32;
+    let bh = (maxy - miny).max(0) as u32;
+    if bw == 0 || bh == 0 { return Ok(()); }
+    let mut out = PixelBuffer::new(bw, bh, [0, 0, 0, 0])?;
+    for y in 0..bh {
+        for x in 0..bw {
             // dest doc coords -> src doc coords -> layer-local
-            let (sx, sy) = inv.apply(x as f64 + 0.5, y as f64 + 0.5);
+            let (sx, sy) = inv.apply(minx as f64 + x as f64 + 0.5, miny as f64 + y as f64 + 0.5);
             let llx = sx - lx as f64 - 0.5;
             let lly = sy - ly as f64 - 0.5;
             let c = sample(&src, llx, lly, r);
@@ -239,8 +256,8 @@ pub fn layer_affine(doc: &mut Document, layer_id: u64, m: &Mat3, r: Resample) ->
     }
     let layer = doc.root.find_mut(layer_id).unwrap();
     layer.pixels = Some(Arc::new(out));
-    layer.x = 0;
-    layer.y = 0;
+    layer.x = minx as i32;
+    layer.y = miny as i32;
     Ok(())
 }
 
@@ -267,20 +284,25 @@ pub fn layer_perspective(doc: &mut Document, layer_id: u64, corners: &[(f64, f64
     let inv_dst = h_dst.inverse().ok_or("degenerate corners")?;
     let full = h_src.mul(&inv_dst);
     let inv = full.inverse().ok_or("singular")?;
-    let (w, h) = (doc.w, doc.h);
-    let mut out = PixelBuffer::new(w, h, [0, 0, 0, 0])?;
-    // limit to dest quad bbox
-    let minx = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor().max(0.0) as u32;
-    let maxx = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil().min(w as f64) as u32;
-    let miny = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor().max(0.0) as u32;
-    let maxy = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil().min(h as f64) as u32;
-    for y in miny..maxy {
-        for x in minx..maxx {
-            let (sxd, syd) = inv.apply(x as f64 + 0.5, y as f64 + 0.5);
+    // Tight dest-quad bounding box (not clamped to the canvas: layers may
+    // legitimately extend past the document edges).
+    let minx = corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i64;
+    let maxx = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i64;
+    let miny = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i64;
+    let maxy = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i64;
+    let bw = (maxx - minx).max(0) as u32;
+    let bh = (maxy - miny).max(0) as u32;
+    if bw == 0 || bh == 0 { return Ok(()); }
+    let mut out = PixelBuffer::new(bw, bh, [0, 0, 0, 0])?;
+    for y in 0..bh {
+        for x in 0..bw {
+            let dx = minx as f64 + x as f64 + 0.5;
+            let dy = miny as f64 + y as f64 + 0.5;
+            let (sxd, syd) = inv.apply(dx, dy);
             let llx = sxd - lx as f64 - 0.5;
             let lly = syd - ly as f64 - 0.5;
             // check unit-square containment (with small tolerance)
-            let (u, v) = inv_dst.apply(x as f64 + 0.5, y as f64 + 0.5);
+            let (u, v) = inv_dst.apply(dx, dy);
             if u < -0.002 || v < -0.002 || u > 1.002 || v > 1.002 { continue; }
             let c = sample(&src, llx, lly, r);
             out.set(x, y, c);
@@ -288,8 +310,8 @@ pub fn layer_perspective(doc: &mut Document, layer_id: u64, corners: &[(f64, f64
     }
     let layer = doc.root.find_mut(layer_id).unwrap();
     layer.pixels = Some(Arc::new(out));
-    layer.x = 0;
-    layer.y = 0;
+    layer.x = minx as i32;
+    layer.y = miny as i32;
     Ok(())
 }
 

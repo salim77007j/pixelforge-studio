@@ -91,6 +91,7 @@ int32_t pf_selection_clear(PFDoc doc);
 int32_t pf_layer_translate(PFDoc doc, uint64_t id, int32_t dx, int32_t dy, int32_t commit);
 int32_t pf_layer_affine(PFDoc doc, uint64_t id, const double *m, int32_t resample);
 int32_t pf_layer_flip(PFDoc doc, uint64_t id, int32_t horizontal);
+int32_t pf_image_flip(PFDoc doc, int32_t horizontal);
 int32_t pf_image_rotate(PFDoc doc, int32_t deg);
 int32_t pf_layer_perspective(PFDoc doc, uint64_t id, const double *corners, int32_t resample);
 int32_t pf_image_resize(PFDoc doc, uint32_t w, uint32_t h, int32_t resample);

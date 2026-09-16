@@ -20,7 +20,9 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QApplication>
+#include <QScreen>
 #include <QLabel>
+#include <QLineEdit>
 #include <QComboBox>
 #include <QToolButton>
 #include <QHBoxLayout>
@@ -67,10 +69,33 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QSettings s;
     restoreGeometry(s.value("win/geometry").toByteArray());
     restoreState(s.value("win/state").toByteArray());
+    // Guard against stale geometry from a different screen setup (e.g. a
+    // window last closed on a 4K external display, now opened on a laptop
+    // panel, or a settings file written by a headless run). If the restored
+    // window doesn't reasonably fit the current virtual desktop, fall back
+    // to the designed default size so the UI looks the same everywhere.
+    {
+        QRect desk = QGuiApplication::primaryScreen()->availableGeometry();
+        for (QScreen *sc : QGuiApplication::screens())
+            desk = desk.united(sc->availableGeometry());
+        QRect g = geometry();
+        bool usable = g.width() >= 1000 && g.height() >= 640
+            && desk.intersects(g)
+            && (g & desk).width() >= g.width() * 2 / 3
+            && (g & desk).height() >= g.height() * 2 / 3;
+        if (!usable) {
+            QSize def(1440, 860);
+            def = def.boundedTo(desk.size() - QSize(24, 48));
+            def = def.expandedTo(QSize(960, 600));
+            setGeometry(QRect(QPoint(desk.center().x() - def.width() / 2,
+                                     desk.center().y() - def.height() / 2), def));
+        }
+    }
 
     // startup document (no dialog — "New…" menu opens one on demand)
     createUntitled();
     applyShortcuts();
+    if (m_colorPanel) m_colorPanel->refresh(); // sync wheel/swatches to default FG
     if (qEnvironmentVariableIsSet("PF_DEBUG_KEYS")) {
         // discriminator: bare action (no menu) + plain QShortcut
         QAction *dbgPlain = new QAction("dbgplain", this);
@@ -157,117 +182,103 @@ QWidget *MainWindow::makePanel(const QString &title, QWidget *inner) {
 // ---------------------------------------------------------------- menus
 
 void MainWindow::buildMenus() {
+    // NOTE: the 5th argument of addCmd() is the target menu's objectName.
+    // Dropping it leaves the command action invisible (menu shows empty) —
+    // this was the "dead top buttons" bug; every call must name its menu.
     // File
-    QMenu *file = menuBar()->addMenu(tr("&File"));
-    file->setObjectName("mFile");
-    addCmd("file.new", tr("&New…"), QKeySequence::New, SLOT(newDocument()));
-    addCmd("file.open", tr("&Open…"), QKeySequence::Open, SLOT(openFile()));
-    addCmd("file.openRecent", tr("Open &Recent"), QKeySequence(), SLOT(openRecent()));
-    file->addSeparator();
-    addCmd("file.save", tr("&Save Project (ORA)"), QKeySequence::Save, SLOT(saveDocument()));
-    addCmd("file.saveAs", tr("Save Project &As…"), QKeySequence::SaveAs, SLOT(saveDocumentAs()));
-    addCmd("file.export", tr("&Export Image…"), QKeySequence("Ctrl+E"), SLOT(exportImage()));
-    file->addSeparator();
-    addCmd("file.importLayer", tr("Import Image as Layer…"), QKeySequence("Ctrl+Shift+O"), SLOT(openFile()));
+    menuBar()->addMenu(tr("&File"))->setObjectName("mFile");
+    addCmd("file.new", tr("&New…"), QKeySequence::New, SLOT(newDocument()), "mFile");
+    addCmd("file.open", tr("&Open…"), QKeySequence::Open, SLOT(openFile()), "mFile");
+    addCmd("file.openRecent", tr("Open &Recent"), QKeySequence(), SLOT(openRecent()), "mFile");
+    addCmd("file.save", tr("&Save Project (ORA)"), QKeySequence::Save, SLOT(saveDocument()), "mFile");
+    addCmd("file.saveAs", tr("Save Project &As…"), QKeySequence::SaveAs, SLOT(saveDocumentAs()), "mFile");
+    addCmd("file.export", tr("&Export Image…"), QKeySequence("Ctrl+E"), SLOT(exportImage()), "mFile");
+    addCmd("file.importLayer", tr("Import Image as Layer…"), QKeySequence("Ctrl+Shift+O"), SLOT(openFile()), "mFile");
 
     // Edit
-    QMenu *edit = menuBar()->addMenu(tr("&Edit"));
-    edit->setObjectName("mEdit");
-    addCmd("edit.undo", tr("&Undo"), QKeySequence::Undo, SLOT(undo()));
-    addCmd("edit.redo", tr("&Redo"), QKeySequence::Redo, SLOT(redo()));
-    edit->addSeparator();
-    addCmd("edit.copy", tr("Copy &Visible"), QKeySequence::Copy, SLOT(copyVisible()));
-    addCmd("edit.paste", tr("&Paste as New Layer"), QKeySequence::Paste, SLOT(pasteClipboard()));
-    addCmd("edit.clear", tr("Clear (Delete selection)"), QKeySequence("Delete"), SLOT(clearArea()));
-    edit->addSeparator();
-    addCmd("edit.fillFg", tr("Fill with &Foreground"), QKeySequence("Alt+Backspace"), SLOT(fillFg()));
-    addCmd("edit.fillBg", tr("Fill with Back&ground"), QKeySequence("Ctrl+Backspace"), SLOT(fillBg()));
-    addCmd("edit.strokeSel", tr("&Stroke Selection…"), QKeySequence(), SLOT(strokeSelection()));
-    edit->addSeparator();
-    addCmd("edit.shortcuts", tr("Keyboard &Shortcuts…"), QKeySequence("Ctrl+Alt+K"), SLOT(preferences()));
+    menuBar()->addMenu(tr("&Edit"))->setObjectName("mEdit");
+    addCmd("edit.undo", tr("&Undo"), QKeySequence::Undo, SLOT(undo()), "mEdit");
+    addCmd("edit.redo", tr("&Redo"), QKeySequence::Redo, SLOT(redo()), "mEdit");
+    addCmd("edit.copy", tr("Copy &Visible"), QKeySequence::Copy, SLOT(copyVisible()), "mEdit");
+    addCmd("edit.paste", tr("&Paste as New Layer"), QKeySequence::Paste, SLOT(pasteClipboard()), "mEdit");
+    addCmd("edit.clear", tr("Clear (Delete selection)"), QKeySequence("Delete"), SLOT(clearArea()), "mEdit");
+    addCmd("edit.fillFg", tr("Fill with &Foreground"), QKeySequence("Alt+Backspace"), SLOT(fillFg()), "mEdit");
+    addCmd("edit.fillBg", tr("Fill with Back&ground"), QKeySequence("Ctrl+Backspace"), SLOT(fillBg()), "mEdit");
+    addCmd("edit.strokeSel", tr("&Stroke Selection…"), QKeySequence(), SLOT(strokeSelection()), "mEdit");
+    addCmd("edit.shortcuts", tr("Keyboard &Shortcuts…"), QKeySequence("Ctrl+Alt+K"), SLOT(preferences()), "mEdit");
 
     // Image
-    QMenu *image = menuBar()->addMenu(tr("&Image"));
-    image->setObjectName("mImage");
-    addCmd("image.size", tr("Image &Size…"), QKeySequence("Ctrl+Alt+I"), SLOT(imageSize()));
-    addCmd("image.canvas", tr("Canvas Si&ze…"), QKeySequence("Ctrl+Alt+C"), SLOT(canvasSize()));
-    addCmd("image.cropSel", tr("Crop to &Selection"), QKeySequence(), SLOT(cropToSelection()));
-    addCmd("image.trim", tr("&Trim Transparent Edges"), QKeySequence(), SLOT(trimTransparent()));
-    image->addSeparator();
-    addCmd("image.rot90", tr("Rotate 90° Clockwise"), QKeySequence("Ctrl+R"), SLOT(rotateImage90()));
-    addCmd("image.rot180", tr("Rotate 180°"), QKeySequence(), SLOT(rotateImage180()));
-    addCmd("image.rot270", tr("Rotate 90° Counter-Clockwise"), QKeySequence("Ctrl+Shift+R"), SLOT(rotateImage270()));
-    addCmd("image.flipH", tr("Flip &Horizontally"), QKeySequence(), SLOT(flipImageH()));
-    addCmd("image.flipV", tr("Flip &Vertically"), QKeySequence(), SLOT(flipImageV()));
+    menuBar()->addMenu(tr("&Image"))->setObjectName("mImage");
+    addCmd("image.size", tr("Image &Size…"), QKeySequence("Ctrl+Alt+I"), SLOT(imageSize()), "mImage");
+    addCmd("image.canvas", tr("Canvas Si&ze…"), QKeySequence("Ctrl+Alt+C"), SLOT(canvasSize()), "mImage");
+    addCmd("image.cropSel", tr("Crop to &Selection"), QKeySequence(), SLOT(cropToSelection()), "mImage");
+    addCmd("image.trim", tr("&Trim Transparent Edges"), QKeySequence(), SLOT(trimTransparent()), "mImage");
+    addCmd("image.rot90", tr("Rotate 90° Clockwise"), QKeySequence("Ctrl+R"), SLOT(rotateImage90()), "mImage");
+    addCmd("image.rot180", tr("Rotate 180°"), QKeySequence(), SLOT(rotateImage180()), "mImage");
+    addCmd("image.rot270", tr("Rotate 90° Counter-Clockwise"), QKeySequence("Ctrl+Shift+R"), SLOT(rotateImage270()), "mImage");
+    addCmd("image.flipH", tr("Flip &Horizontally"), QKeySequence(), SLOT(flipImageH()), "mImage");
+    addCmd("image.flipV", tr("Flip &Vertically"), QKeySequence(), SLOT(flipImageV()), "mImage");
 
     // Layer
-    QMenu *layer = menuBar()->addMenu(tr("&Layer"));
-    layer->setObjectName("mLayer");
-    addCmd("layer.new", tr("&New Layer"), QKeySequence("Ctrl+Shift+N"), SLOT(newLayer()));
-    addCmd("layer.newGroup", tr("New &Group"), QKeySequence("Ctrl+G"), SLOT(newGroup()));
-    addCmd("layer.duplicate", tr("&Duplicate Layer"), QKeySequence("Ctrl+J"), SLOT(duplicateLayer()));
-    addCmd("layer.delete", tr("Dele&te Layer"), QKeySequence(), SLOT(deleteLayer()));
-    layer->addSeparator();
-    addCmd("layer.maskSel", tr("Add Layer Mask from Se&lection"), QKeySequence(), SLOT(addMaskFromSelection()));
-    addCmd("layer.mergeDown", tr("&Merge Down"), QKeySequence(), SLOT(mergeDown()));
-    addCmd("layer.flatten", tr("&Flatten Image"), QKeySequence("Ctrl+Shift+F"), SLOT(flattenImage()));
-    layer->addSeparator();
-    addCmd("layer.up", tr("Move Layer &Up"), QKeySequence("Ctrl+]"), SLOT(layerUp()));
-    addCmd("layer.down", tr("Move Layer &Down"), QKeySequence("Ctrl+["), SLOT(layerDown()));
+    menuBar()->addMenu(tr("&Layer"))->setObjectName("mLayer");
+    addCmd("layer.new", tr("&New Layer"), QKeySequence("Ctrl+Shift+N"), SLOT(newLayer()), "mLayer");
+    addCmd("layer.newGroup", tr("New &Group"), QKeySequence("Ctrl+G"), SLOT(newGroup()), "mLayer");
+    addCmd("layer.duplicate", tr("&Duplicate Layer"), QKeySequence("Ctrl+J"), SLOT(duplicateLayer()), "mLayer");
+    addCmd("layer.delete", tr("Dele&te Layer"), QKeySequence(), SLOT(deleteLayer()), "mLayer");
+    addCmd("layer.maskSel", tr("Add Layer Mask from Se&lection"), QKeySequence(), SLOT(addMaskFromSelection()), "mLayer");
+    addCmd("layer.mergeDown", tr("&Merge Down"), QKeySequence(), SLOT(mergeDown()), "mLayer");
+    addCmd("layer.flatten", tr("&Flatten Image"), QKeySequence("Ctrl+Shift+F"), SLOT(flattenImage()), "mLayer");
+    addCmd("layer.up", tr("Move Layer &Up"), QKeySequence("Ctrl+]"), SLOT(layerUp()), "mLayer");
+    addCmd("layer.down", tr("Move Layer &Down"), QKeySequence("Ctrl+["), SLOT(layerDown()), "mLayer");
+    addCmd("layer.flipH", tr("Flip Layer Hori&zontally"), QKeySequence(), SLOT(flipLayerH()), "mLayer");
+    addCmd("layer.flipV", tr("Flip Layer Verticall&y"), QKeySequence(), SLOT(flipLayerV()), "mLayer");
 
     // Select
-    QMenu *sel = menuBar()->addMenu(tr("&Select"));
-    sel->setObjectName("mSelect");
-    addCmd("select.all", tr("Select &All"), QKeySequence::SelectAll, SLOT(selectAll()));
-    addCmd("select.none", tr("&Deselect"), QKeySequence("Ctrl+D"), SLOT(deselect()));
-    addCmd("select.invert", tr("&Inverse"), QKeySequence("Ctrl+Shift+I"), SLOT(invertSelection()));
-    addCmd("select.feather", tr("&Feather…"), QKeySequence("Ctrl+Alt+D"), SLOT(featherSelection()));
+    menuBar()->addMenu(tr("&Select"))->setObjectName("mSelect");
+    addCmd("select.all", tr("Select &All"), QKeySequence::SelectAll, SLOT(selectAll()), "mSelect");
+    addCmd("select.none", tr("&Deselect"), QKeySequence("Ctrl+D"), SLOT(deselect()), "mSelect");
+    addCmd("select.invert", tr("&Inverse"), QKeySequence("Ctrl+Shift+I"), SLOT(invertSelection()), "mSelect");
+    addCmd("select.feather", tr("&Feather…"), QKeySequence("Ctrl+Alt+D"), SLOT(featherSelection()), "mSelect");
 
     // Filter
     QMenu *filter = menuBar()->addMenu(tr("&Filter"));
     filter->setObjectName("mFilter");
-    addCmd("filter.blur", tr("&Gaussian Blur…"), QKeySequence(), SLOT(filterBlur()));
-    addCmd("filter.sharpen", tr("&Sharpen…"), QKeySequence(), SLOT(filterSharpen()));
-    addCmd("filter.noise", tr("Add &Noise…"), QKeySequence(), SLOT(filterNoise()));
-    addCmd("filter.pixelate", tr("&Pixelate…"), QKeySequence(), SLOT(filterPixelate()));
-    filter->addSeparator();
-    addCmd("filter.twirl", tr("&Twirl…"), QKeySequence(), SLOT(filterTwirl()));
-    addCmd("filter.wave", tr("&Wave…"), QKeySequence(), SLOT(filterWave()));
-    filter->addSeparator();
-    addCmd("filter.edges", tr("Find &Edges"), QKeySequence(), SLOT(filterEdges()));
-    addCmd("filter.emboss", tr("&Emboss…"), QKeySequence(), SLOT(filterEmboss()));
-    addCmd("filter.vignette", tr("&Vignette…"), QKeySequence(), SLOT(filterVignette()));
+    addCmd("filter.blur", tr("&Gaussian Blur…"), QKeySequence(), SLOT(filterBlur()), "mFilter");
+    addCmd("filter.sharpen", tr("&Sharpen…"), QKeySequence(), SLOT(filterSharpen()), "mFilter");
+    addCmd("filter.noise", tr("Add &Noise…"), QKeySequence(), SLOT(filterNoise()), "mFilter");
+    addCmd("filter.pixelate", tr("&Pixelate…"), QKeySequence(), SLOT(filterPixelate()), "mFilter");
+    addCmd("filter.twirl", tr("&Twirl…"), QKeySequence(), SLOT(filterTwirl()), "mFilter");
+    addCmd("filter.wave", tr("&Wave…"), QKeySequence(), SLOT(filterWave()), "mFilter");
+    addCmd("filter.edges", tr("Find &Edges"), QKeySequence(), SLOT(filterEdges()), "mFilter");
+    addCmd("filter.emboss", tr("&Emboss…"), QKeySequence(), SLOT(filterEmboss()), "mFilter");
+    addCmd("filter.vignette", tr("&Vignette…"), QKeySequence(), SLOT(filterVignette()), "mFilter");
 
     // Adjustments submenu inside Filter
     QMenu *adjust = filter->addMenu(tr("&Adjustments"));
     adjust->setObjectName("mAdjust");
-    addCmd("adjust.bright", tr("&Brightness/Contrast…"), QKeySequence(), SLOT(adjustBrightnessContrast()));
-    addCmd("adjust.hue", tr("&Hue/Saturation…"), QKeySequence("Ctrl+U"), SLOT(adjustHueSat()));
-    addCmd("adjust.levels", tr("&Levels…"), QKeySequence("Ctrl+L"), SLOT(adjustLevels()));
-    addCmd("adjust.curves", tr("&Curves…"), QKeySequence("Ctrl+M"), SLOT(adjustCurves()));
-    adjust->addSeparator();
-    addCmd("adjust.invert", tr("&Invert Colors"), QKeySequence("Ctrl+I"), SLOT(adjustInvert()));
-    addCmd("adjust.desat", tr("&Desaturate"), QKeySequence("Ctrl+Shift+U"), SLOT(adjustDesaturate()));
-    addCmd("adjust.auto", tr("&Auto Contrast"), QKeySequence(), SLOT(adjustAutoContrast()));
+    addCmd("adjust.bright", tr("&Brightness/Contrast…"), QKeySequence(), SLOT(adjustBrightnessContrast()), "mAdjust");
+    addCmd("adjust.hue", tr("&Hue/Saturation…"), QKeySequence("Ctrl+U"), SLOT(adjustHueSat()), "mAdjust");
+    addCmd("adjust.levels", tr("&Levels…"), QKeySequence("Ctrl+L"), SLOT(adjustLevels()), "mAdjust");
+    addCmd("adjust.curves", tr("&Curves…"), QKeySequence("Ctrl+M"), SLOT(adjustCurves()), "mAdjust");
+    addCmd("adjust.invert", tr("&Invert Colors"), QKeySequence("Ctrl+I"), SLOT(adjustInvert()), "mAdjust");
+    addCmd("adjust.desat", tr("&Desaturate"), QKeySequence("Ctrl+Shift+U"), SLOT(adjustDesaturate()), "mAdjust");
+    addCmd("adjust.auto", tr("&Auto Contrast"), QKeySequence(), SLOT(adjustAutoContrast()), "mAdjust");
 
     // View
-    QMenu *view = menuBar()->addMenu(tr("&View"));
-    view->setObjectName("mView");
-    addCmd("view.zoomIn", tr("Zoom &In"), QKeySequence::ZoomIn, SLOT(zoomIn()));
-    addCmd("view.zoomOut", tr("Zoom &Out"), QKeySequence::ZoomOut, SLOT(zoomOut()));
-    addCmd("view.zoomFit", tr("&Fit on Screen"), QKeySequence("Ctrl+0"), SLOT(zoomFit()));
-    addCmd("view.zoom100", tr("Actual &Pixels (100%)"), QKeySequence("Ctrl+1"), SLOT(zoom100()));
+    menuBar()->addMenu(tr("&View"))->setObjectName("mView");
+    addCmd("view.zoomIn", tr("Zoom &In"), QKeySequence::ZoomIn, SLOT(zoomIn()), "mView");
+    addCmd("view.zoomOut", tr("Zoom &Out"), QKeySequence::ZoomOut, SLOT(zoomOut()), "mView");
+    addCmd("view.zoomFit", tr("&Fit on Screen"), QKeySequence("Ctrl+0"), SLOT(zoomFit()), "mView");
+    addCmd("view.zoom100", tr("Actual &Pixels (100%)"), QKeySequence("Ctrl+1"), SLOT(zoom100()), "mView");
 
     // Window
-    QMenu *win = menuBar()->addMenu(tr("&Window"));
-    win->setObjectName("mWindow");
-    addCmd("win.saveWorkspace", tr("&Save Workspace"), QKeySequence(), SLOT(saveWorkspace()));
-    addCmd("win.resetWorkspace", tr("&Reset Workspace"), QKeySequence(), SLOT(resetWorkspace()));
+    menuBar()->addMenu(tr("&Window"))->setObjectName("mWindow");
+    addCmd("win.saveWorkspace", tr("&Save Workspace"), QKeySequence(), SLOT(saveWorkspace()), "mWindow");
+    addCmd("win.resetWorkspace", tr("&Reset Workspace"), QKeySequence(), SLOT(resetWorkspace()), "mWindow");
 
     // Help
-    QMenu *help = menuBar()->addMenu(tr("&Help"));
-    help->setObjectName("mHelp");
-    addCmd("help.about", tr("&About PixelForge Studio"), QKeySequence(), SLOT(about()));
+    menuBar()->addMenu(tr("&Help"))->setObjectName("mHelp");
+    addCmd("help.about", tr("&About PixelForge Studio"), QKeySequence(), SLOT(about()), "mHelp");
 }
 
 // ---------------------------------------------------------------- top bar
@@ -282,11 +293,42 @@ void MainWindow::buildTopBar() {
     auto *zoomBtn = new QToolButton;
     zoomBtn->setIcon(Icons::get(Icons::Zoom));
     zoomBtn->setToolTip(tr("Zoom out (Ctrl+scroll on canvas)"));
-    m_zoomLabel = new QLabel(QStringLiteral("100%"));
-    m_zoomLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;min-width:44px;").arg(Theme::Text));
     connect(zoomBtn, &QToolButton::clicked, this, &MainWindow::zoomOut);
     m_topBar->addWidget(zoomBtn);
-    m_topBar->addWidget(m_zoomLabel);
+
+    // Zoom selector: presets + Fit + free numeric entry (editable).
+    m_zoomCombo = new QComboBox;
+    m_zoomCombo->setObjectName("zoomCombo");
+    m_zoomCombo->setEditable(true);
+    m_zoomCombo->setInsertPolicy(QComboBox::NoInsert);
+    for (const char *z : {"Fit", "25%", "33%", "50%", "67%", "100%", "150%", "200%", "300%", "400%"})
+        m_zoomCombo->addItem(QString::fromLatin1(z));
+    m_zoomCombo->setCurrentText(QStringLiteral("100%"));
+    m_zoomCombo->setFixedWidth(86);
+    m_zoomCombo->setToolTip(tr("Zoom level — pick a preset or type a percentage (1–3200)"));
+    auto applyZoomText = [this](const QString &raw) {
+        EditorTab *tab = currentTab();
+        if (!tab) return;
+        QString t = raw.trimmed();
+        if (t.compare(QLatin1String("Fit"), Qt::CaseInsensitive) == 0) {
+            zoomFit();
+            return;
+        }
+        bool ok = false;
+        int pct = t.remove('%').toInt(&ok);
+        if (ok && pct >= 1 && pct <= 3200)
+            tab->m_canvas->setZoomImmediate(pct / 100.0);
+        else
+            showZoom(tab->m_canvas->zoom()); // revert to current
+    };
+    connect(m_zoomCombo, &QComboBox::activated, this, [this, applyZoomText](int) {
+        applyZoomText(m_zoomCombo->currentText());
+    });
+    if (auto *le = m_zoomCombo->lineEdit())
+        connect(le, &QLineEdit::editingFinished, this, [this, applyZoomText]() {
+            applyZoomText(m_zoomCombo->currentText());
+        });
+    m_topBar->addWidget(m_zoomCombo);
 
     m_topBar->addSeparator();
 
@@ -310,13 +352,13 @@ void MainWindow::buildTopBar() {
     flipBtn->setText(tr("Flip canvas"));
     flipBtn->setIcon(Icons::get(Icons::FlipH));
     flipBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    flipBtn->setToolTip(tr("Flip canvas horizontally"));
+    flipBtn->setToolTip(tr("Flip entire canvas horizontally (all layers)"));
     connect(flipBtn, &QToolButton::clicked, this, &MainWindow::flipImageH);
     m_topBar->addWidget(flipBtn);
 
     auto *flipVBtn = new QToolButton;
     flipVBtn->setIcon(Icons::get(Icons::FlipV));
-    flipVBtn->setToolTip(tr("Flip canvas vertically"));
+    flipVBtn->setToolTip(tr("Flip entire canvas vertically (all layers)"));
     connect(flipVBtn, &QToolButton::clicked, this, &MainWindow::flipImageV);
     m_topBar->addWidget(flipVBtn);
 
@@ -481,16 +523,8 @@ void MainWindow::buildDocks() {
     m_dockColor->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
     m_dockColor->setTitleBarWidget(new QWidget());
 
-    m_dockHistory = new QDockWidget(tr("History"), this);
-    m_dockHistory->setObjectName("dockHistory");
-    m_dockHistory->setWidget(m_historyPanel);
-    m_dockHistory->setTitleBarWidget(new QWidget());
-    m_dockHistory->hide(); // lives in col2
-
     addDockWidget(Qt::RightDockWidgetArea, m_dockLayers);
     splitDockWidget(m_dockLayers, m_dockColor, Qt::Horizontal);
-    // remove the standalone history dock (kept as toggle handle)
-    removeDockWidget(m_dockHistory);
 
     m_dockLayers->setMinimumWidth(240);
     m_dockColor->setMinimumWidth(240);
@@ -501,9 +535,10 @@ void MainWindow::buildDocks() {
 }
 
 void MainWindow::toggleHistoryPanel(bool on) {
-    // The history panel lives in the right column; toggling shows/hides col2 lower half
-    if (m_historyPanel->parentWidget())
-        m_historyPanel->setVisible(on);
+    // History lives in the right column's "History" card; toggle the whole
+    // card (header + list) so the toggle button has a real visible effect.
+    if (QWidget *card = m_historyPanel ? m_historyPanel->parentWidget() : nullptr)
+        card->setVisible(on);
 }
 
 // ---------------------------------------------------------------- tool options bar
@@ -684,7 +719,13 @@ void MainWindow::showCursorPos(const QPointF &p) {
 }
 
 void MainWindow::showZoom(double zoom) {
-    m_zoomLabel->setText(QString::number(qRound(zoom * 100)) + QStringLiteral("%"));
+    if (!m_zoomCombo) return;
+    QString t = QString::number(qRound(zoom * 100)) + QStringLiteral("%");
+    if (m_zoomCombo->currentText() != t) {
+        m_zoomCombo->blockSignals(true);
+        m_zoomCombo->setCurrentText(t);
+        m_zoomCombo->blockSignals(false);
+    }
 }
 
 void MainWindow::showStatus(const QString &msg) {
@@ -1015,10 +1056,22 @@ void MainWindow::rotateImage270() {
 void MainWindow::flipImageH() {
     EditorTab *tab = currentTab();
     if (!tab) return;
+    pf_image_flip(tab->m_doc.handle(), 1);
+    tab->afterStructureEdit();
+}
+void MainWindow::flipImageV() {
+    EditorTab *tab = currentTab();
+    if (!tab) return;
+    pf_image_flip(tab->m_doc.handle(), 0);
+    tab->afterStructureEdit();
+}
+void MainWindow::flipLayerH() {
+    EditorTab *tab = currentTab();
+    if (!tab) return;
     pf_layer_flip(tab->m_doc.handle(), tab->m_doc.activeLayer(), 1);
     tab->afterEdit();
 }
-void MainWindow::flipImageV() {
+void MainWindow::flipLayerV() {
     EditorTab *tab = currentTab();
     if (!tab) return;
     pf_layer_flip(tab->m_doc.handle(), tab->m_doc.activeLayer(), 0);

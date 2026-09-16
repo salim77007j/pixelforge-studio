@@ -1187,6 +1187,46 @@ pub extern "C" fn pf_image_rotate(doc: PFDoc, deg: i32) -> i32 {
     })
 }
 
+/// Flip the whole image (all layers, canvas dims unchanged).
+/// horizontal != 0 → mirror left/right, else mirror top/bottom.
+#[no_mangle]
+pub extern "C" fn pf_image_flip(doc: PFDoc, horizontal: i32) -> i32 {
+    guard_int!({
+        let d = unsafe { doc.as_mut().ok_or("null doc")? };
+        let (w, h) = (d.w, d.h);
+        let flip_layer = |l: &mut LayerNode| -> Result<(), String> {
+            if l.kind != LayerKind::Raster { return Ok(()); }
+            let px = l.pixels.as_ref().ok_or("no pixels")?.as_ref().clone();
+            let mut out = PixelBuffer::new(px.w, px.h, [0, 0, 0, 0])?;
+            for y in 0..px.h {
+                for x in 0..px.w {
+                    let sx = if horizontal != 0 { px.w - 1 - x } else { x };
+                    let sy = if horizontal != 0 { y } else { px.h - 1 - y };
+                    out.set(x, y, px.get(sx, sy));
+                }
+            }
+            // layer offset mirrors inside the canvas: x' = w - (x + pw)
+            if horizontal != 0 {
+                l.x = (w as i64 - (l.x as i64 + px.w as i64)) as i32;
+            } else {
+                l.y = (h as i64 - (l.y as i64 + px.h as i64)) as i32;
+            }
+            l.pixels = Some(Arc::new(out));
+            Ok(())
+        };
+        fn walk_flip(node: &mut LayerNode, f: &dyn Fn(&mut LayerNode) -> Result<(), String>) -> Result<(), String> {
+            f(node)?;
+            for c in node.children.iter_mut() {
+                walk_flip(c, f)?;
+            }
+            Ok(())
+        }
+        walk_flip(&mut d.root, &flip_layer)?;
+        d.push_history("Flip Image");
+        0
+    })
+}
+
 /// 4 dest corners (doc coords) for the layer's current rect.
 #[no_mangle]
 pub extern "C" fn pf_layer_perspective(doc: PFDoc, id: u64, corners: *const f64, resample: i32) -> i32 {
@@ -1785,4 +1825,120 @@ pub extern "C" fn pf_rust_engine_info() -> *const c_char {
         );
         CString::new(info).unwrap().into_raw() as *const c_char
     })
+}
+
+#[cfg(test)]
+mod image_flip_tests {
+    use super::*;
+
+    fn make_doc_with_offcenter_layer() -> (Document, u64) {
+        // 100x80 canvas; layer 40x30 placed at (20,10) with a recognizable pixel pattern.
+        let mut d = Document::new(100, 80, [255, 255, 255, 255]).unwrap();
+        let id = d.alloc_id();
+        let mut buf = PixelBuffer::new(40, 30, [0, 0, 0, 0]).unwrap();
+        // left column red, right column blue
+        for y in 0..30 {
+            buf.set(0, y, [255, 0, 0, 255]);
+            buf.set(39, y, [0, 0, 255, 255]);
+        }
+        let mut node = LayerNode::new_raster(id, "L".to_string(), buf);
+        node.x = 20;
+        node.y = 10;
+        d.root.children.insert(0, node);
+        d.active = id;
+        (d, id)
+    }
+
+    #[test]
+    fn image_flip_horizontal_mirrors_layers_and_offsets() {
+        let (mut d, id) = make_doc_with_offcenter_layer();
+        let before = d.root.find(id).unwrap().pixels.as_ref().unwrap().clone();
+        assert_eq!(pf_image_flip(&mut d as PFDoc, 1), 0);
+        let l = d.root.find(id).unwrap();
+        let after = l.pixels.as_ref().unwrap();
+        // canvas dims unchanged
+        assert_eq!((d.w, d.h), (100, 80));
+        // offset mirrored: x' = 100 - (20 + 40) = 40
+        assert_eq!(l.x, 40);
+        assert_eq!(l.y, 10);
+        // pixel content mirrored: old(0,y)=red -> new(39,y)=red
+        let px = after.as_ref();
+        assert_eq!(px.get(39, 5), [255, 0, 0, 255]);
+        assert_eq!(px.get(0, 5), [0, 0, 255, 255]);
+        // double flip restores original (content + offset)
+        assert_eq!(pf_image_flip(&mut d as PFDoc, 1), 0);
+        let l2 = d.root.find(id).unwrap();
+        assert_eq!(l2.x, 20);
+        let p2 = l2.pixels.as_ref().unwrap().as_ref();
+        for y in 0..30 {
+            for x in 0..40 {
+                assert_eq!(p2.get(x, y), before.as_ref().get(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn image_flip_vertical_mirrors_offsets() {
+        let (mut d, id) = make_doc_with_offcenter_layer();
+        assert_eq!(pf_image_flip(&mut d as PFDoc, 0), 0);
+        let l = d.root.find(id).unwrap();
+        assert_eq!((d.w, d.h), (100, 80));
+        // y' = 80 - (10 + 30) = 40 ; x untouched
+        assert_eq!(l.x, 20);
+        assert_eq!(l.y, 40);
+    }
+}
+
+#[cfg(test)]
+mod perspective_tests {
+    use super::*;
+
+    #[test]
+    fn perspective_actually_warps() {
+        let mut d = Document::new(400, 300, [255, 255, 255, 255]).unwrap();
+        let id = d.alloc_id();
+        let mut buf = PixelBuffer::new(100, 80, [0, 0, 0, 0]).unwrap();
+        for y in 0..80 {
+            for x in 0..50 {
+                buf.set(x, y, [255, 0, 0, 255]); // left half red
+            }
+        }
+        let mut node = LayerNode::new_raster(id, "L".to_string(), buf);
+        node.x = 50;
+        node.y = 40;
+        d.root.children.insert(0, node);
+        d.active = id;
+
+        let before = d.root.find(id).unwrap().pixels.as_ref().unwrap().as_ref().clone();
+        // pull the top-left corner of the (50,40)-(150,120) rect to (10,10)
+        let corners = [10.0, 10.0, 150.0, 40.0, 150.0, 120.0, 50.0, 120.0];
+        let rc = pf_layer_perspective(&mut d as PFDoc, id, corners.as_ptr(), 2);
+        if rc != 0 {
+            let e = pf_last_error();
+            let msg = unsafe {
+                if !e.is_null() {
+                    let s = std::ffi::CStr::from_ptr(e).to_string_lossy().to_string();
+                    pf_free_str(e as *mut c_char);
+                    s
+                } else { "none".to_string() }
+            };
+            panic!("pf_layer_perspective rc={} err={}", rc, msg);
+        }
+        let after = d.root.find(id).unwrap().pixels.as_ref().unwrap().as_ref().clone();
+        let mut diff = 0usize;
+        if before.w == after.w && before.h == after.h {
+            let n = (before.w as usize) * (before.h as usize);
+            for i in 0..n {
+                if before.data[i * 4] != after.data[i * 4] { diff += 1; }
+            }
+        }
+        let l = d.root.find(id).unwrap();
+        eprintln!("perspective: before {}x{} after {}x{} diff={} offset=({},{})",
+                  before.w, before.h, after.w, after.h, diff, l.x, l.y);
+        // the TL corner was pulled to (10,10): buffer must change, and the
+        // tight bbox must start at the dst quad minimum
+        assert!(before.w != after.w || before.h != after.h || diff > 100,
+                "perspective warp produced identical pixels");
+        assert_eq!((l.x, l.y), (10, 10), "perspective bbox offset");
+    }
 }

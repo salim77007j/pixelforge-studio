@@ -91,6 +91,8 @@ private slots:
     void rotateImage270();
     void flipImageH();
     void flipImageV();
+    void flipLayerH();
+    void flipLayerV();
     // layer
     void newLayer();
     void newGroup();
@@ -158,13 +160,11 @@ private:
     HistoryPanel *m_historyPanel = nullptr;
     QDockWidget *m_dockLayers = nullptr;
     QDockWidget *m_dockColor = nullptr;
-    QDockWidget *m_dockHistory = nullptr;
 
     QToolBar *m_topBar = nullptr;
     QToolBar *m_toolStrip = nullptr;
     QToolBar *m_toolOptions = nullptr;
     QToolBar *m_bottomBar = nullptr;
-    QLabel *m_zoomLabel = nullptr;
     QComboBox *m_zoomCombo = nullptr;
     QLabel *m_statusPos = nullptr;
     QLabel *m_statusDoc = nullptr;

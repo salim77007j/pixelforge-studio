@@ -106,9 +106,9 @@ pub fn select_lasso(doc: &mut Document, pts: &[f64], mode: SelMode) {
         inside
     };
     let minx = poly.iter().map(|p| p.0).fold(f64::MAX, f64::min).floor().max(0.0) as i32;
-    let maxx = poly.iter().map(|p| p.0).fold(f64::MIN, f64::min).ceil().min(mw as f64) as i32;
+    let maxx = poly.iter().map(|p| p.0).fold(f64::MIN, f64::max).ceil().min(mw as f64) as i32;
     let miny = poly.iter().map(|p| p.1).fold(f64::MAX, f64::min).floor().max(0.0) as i32;
-    let maxy = poly.iter().map(|p| p.1).fold(f64::MIN, f64::min).ceil().min(mh as f64) as i32;
+    let maxy = poly.iter().map(|p| p.1).fold(f64::MIN, f64::max).ceil().min(mh as f64) as i32;
     for py in miny..=maxy {
         for px in minx..=maxx {
             if px < 0 || py < 0 { continue; }

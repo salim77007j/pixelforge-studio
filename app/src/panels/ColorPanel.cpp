@@ -313,7 +313,9 @@ void ColorPanel::onFgChanged(const QColor &c) {
 }
 
 void ColorPanel::onHexEdited() {
-    QColor c(m_hex->text());
+    QString t = m_hex->text().trimmed();
+    if (!t.startsWith('#')) t.prepend('#'); // accept both #RRGGBB and RRGGBB
+    QColor c(t);
     if (c.isValid()) {
         m_wheel->setColor(c);
         m_mw->setFgColor(c);

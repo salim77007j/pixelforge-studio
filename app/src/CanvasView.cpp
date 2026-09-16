@@ -78,6 +78,7 @@ void CanvasView::setZoomImmediate(double z) {
     m_origin = QPointF((width() - iw) / 2.0, (height() - ih) / 2.0);
     m_zoom = z;
     update();
+    emit zoomChanged(m_zoom);
 }
 
 // ---------------- composite caching ----------------
@@ -864,7 +865,9 @@ void CanvasView::hideCropBar() {
 
 void CanvasView::applyCropOverlay() {
     if (!m_cropRect.isValid()) return;
-    QRect r = m_cropRect.normalized().toAlignedRect();
+    // toRect() rounds to nearest — toAlignedRect() would round outward and
+    // make every crop 1px larger than the drawn region
+    QRect r = m_cropRect.normalized().toRect();
     uint32_t w, h;
     m_tab->m_doc.size(w, h);
     r = r.intersected(QRect(0, 0, (int)w, (int)h));

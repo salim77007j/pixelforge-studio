@@ -74,9 +74,27 @@ build\Release\PixelForge.exe
 ```bash
 xvfb-run -a ./build/PixelForge --selftest ./selftest-out
 ```
-Runs 35 checks through the real UI + engine: strokes via synthesized input events,
-layers, selections, filters, adjustments, transforms, history, open → edit →
-export in 6 formats, ORA round-trip, and captures screenshots of every step.
+Runs **90 checks** through the real UI + engine, including a **full button audit**:
+
+| Audit area | What is verified |
+|---|---|
+| Menus (A) | all 10 menus populated; all 63 commands reachable from a menu |
+| Tool strip (B) | all 18 tools switch via the real actions, have icons, rebuild the options bar; options controls drive settings |
+| Canvas tools (C) | Move, Rect/Elliptical/Lasso select, Wand, Eyedropper, Bucket, Gradient, Shape, Text (real dialog flow), Transform (drag + Enter), Perspective (drag corner + Enter), Hand, Zoom (left/right click), Pencil, Eraser, Crop (drag + Apply button) — all through synthesized mouse events |
+| Bottom bar (D) | all 5 brush presets set the documented size/hardness and switch to Brush |
+| Layers panel (E) | new layer / group / duplicate / move up / move down / merge down / delete / add-mask buttons, blend combo, opacity slider — verified against engine state |
+| Color panel (F) | swatch click, HEX entry, swap & default buttons |
+| Top bar (G) | 8 buttons: zoom out, zoom combo (typed 200%), undo, redo, flip canvas H/V (pixel round-trip), history toggle, filters dropdown (populated), about dialog |
+| Command sweep (H) | every menu command triggered programmatically with modal dialogs auto-dismissed; the window must stay alive after each |
+| History panel (I) | list reflects engine history, click-to-jump states, clear button |
+
+Also covered: strokes via synthesized input events, layers, selections, filters,
+adjustments, transforms, history, open → edit → export in 6 formats, ORA
+round-trip, and screenshots of every step.
+
+Engine unit tests additionally cover image-level flip (all layers, offsets
+mirrored, double-flip identity) and the perspective homography (pulls a corner,
+tight bbox, real pixel warp).
 
 ## Repository layout
 

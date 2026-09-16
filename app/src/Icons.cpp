@@ -3,18 +3,28 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QApplication>
+#include <QScreen>
 #include <functional>
 
 namespace Icons {
 
-static QIcon make(int size, const std::function<void(QPainter &)> &paint) {
-    QPixmap pm(size, size);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    paint(p);
-    p.end();
-    return QIcon(pm);
+// Icons are raster-painted once and reused. To stay crisp on high-DPI screens
+// (Windows 125%/150%, Retina) every logical size is rendered natively at 1x and
+// 2x with a proper devicePixelRatio, so QIcon picks the sharpest match per screen.
+// The paint lambdas draw in a fixed 32x32 space; we pre-scale the painter.
+static void makeInto(QIcon *icon, int size, const std::function<void(QPainter &)> &paint) {
+    const double k = size / 32.0;
+    for (int dpr : {1, 2}) {
+        QPixmap pm(qRound(32.0 * k) * dpr, qRound(32.0 * k) * dpr);
+        pm.setDevicePixelRatio(dpr);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.scale(k, k);
+        paint(p);
+        p.end();
+        icon->addPixmap(pm);
+    }
 }
 
 static QPen linePen(QPainter &p, qreal w = 2.0) {
@@ -481,13 +491,10 @@ QIcon get(Tool t) {
             break;
         }
     };
-    QIcon base = make(32, s32);
+    // Native renders per logical size at 1x and 2x (see makeInto) — no
+    // downscaled fallbacks, which would go soft on high-DPI screens.
     QIcon out;
-    out.addPixmap(base.pixmap(16, 16));
-    out.addPixmap(base.pixmap(20, 20));
-    out.addPixmap(base.pixmap(24, 24));
-    out.addPixmap(base.pixmap(32, 32));
-    out.addPixmap(base.pixmap(48, 48));
+    for (int s : {16, 20, 24, 32, 48}) makeInto(&out, s, s32);
     return out;
 }
 
