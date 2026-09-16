@@ -54,9 +54,21 @@ jobs:
           mkdir -p dist/PixelForge
           cp build/PixelForge dist/PixelForge/
           cp build/libpfengine.so dist/PixelForge/
-          # gather Qt runtime dependencies
-          ldd dist/PixelForge/PixelForge | awk '{print $3}' | grep -E 'Qt6|libEGL|libOpenGL|libGL|libglapi|libxkb|libxcb|libicu|libdouble|libmd4c|libb2|libgrapheme' | while read -r so; do
-            [ -f "$so" ] && cp "$so" dist/PixelForge/ || true
+          # gather Qt runtime dependencies (binary + all bundled plugins)
+          DEPPAT='Qt6|libEGL|libOpenGL|libGL|libglapi|libxkb|libxcb|libicu|libdouble|libmd4c|libb2|libgrapheme'
+          {
+            ldd dist/PixelForge/PixelForge
+            ldd dist/PixelForge/plugins/platforms/*.so
+            ldd dist/PixelForge/plugins/imageformats/*.so
+            ldd dist/PixelForge/plugins/iconengines/*.so 2>/dev/null || true
+          } | awk '{print $3}' | sort -u | grep -E "$DEPPAT" | while read -r so; do
+            [ -f "$so" ] && cp -n "$so" dist/PixelForge/ || true
+          done
+          # second pass: deps of newly-copied Qt support libs (e.g. libQt6XcbQpa)
+          for so in dist/PixelForge/libQt6*.so*; do
+            ldd "$so" 2>/dev/null | awk '{print $3}' | sort -u | grep -E "$DEPPAT" | while read -r d; do
+              [ -f "$d" ] && cp -n "$d" dist/PixelForge/ || true
+            done
           done
           cat > dist/PixelForge/run.sh <<'SH'
           #!/bin/sh
