@@ -51,23 +51,26 @@ jobs:
       - name: Bundle Linux app (binary + engine + Qt libs)
         run: |
           set -e
-          mkdir -p dist/PixelForge
+          mkdir -p dist/PixelForge/plugins
           cp build/PixelForge dist/PixelForge/
           cp build/libpfengine.so dist/PixelForge/
-          # gather Qt runtime dependencies (binary + all bundled plugins)
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/platforms dist/PixelForge/plugins/
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats dist/PixelForge/plugins/
+          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/iconengines dist/PixelForge/plugins/ 2>/dev/null || true
+          # gather Qt runtime deps: binary + every bundled plugin + copied Qt libs (2 passes)
           DEPPAT='Qt6|libEGL|libOpenGL|libGL|libglapi|libxkb|libxcb|libicu|libdouble|libmd4c|libb2|libgrapheme'
-          {
-            ldd dist/PixelForge/PixelForge
-            ldd dist/PixelForge/plugins/platforms/*.so
-            ldd dist/PixelForge/plugins/imageformats/*.so
-            ldd dist/PixelForge/plugins/iconengines/*.so 2>/dev/null || true
-          } | awk '{print $3}' | sort -u | grep -E "$DEPPAT" | while read -r so; do
-            [ -f "$so" ] && cp -n "$so" dist/PixelForge/ || true
-          done
-          # second pass: deps of newly-copied Qt support libs (e.g. libQt6XcbQpa)
-          for so in dist/PixelForge/libQt6*.so*; do
-            ldd "$so" 2>/dev/null | awk '{print $3}' | sort -u | grep -E "$DEPPAT" | while read -r d; do
-              [ -f "$d" ] && cp -n "$d" dist/PixelForge/ || true
+          for pass in 1 2; do
+            {
+              ldd dist/PixelForge/PixelForge
+              ldd dist/PixelForge/libpfengine.so
+              ldd dist/PixelForge/plugins/platforms/*.so
+              ldd dist/PixelForge/plugins/imageformats/*.so
+              ldd dist/PixelForge/plugins/iconengines/*.so 2>/dev/null || true
+              ldd dist/PixelForge/libQt6*.so* 2>/dev/null || true
+              ldd dist/PixelForge/libxcb*.so* 2>/dev/null || true
+              ldd dist/PixelForge/libxkb*.so* 2>/dev/null || true
+            } | awk '{print $3}' | sort -u | grep -E "$DEPPAT" | while read -r so; do
+              [ -f "$so" ] && cp -n "$so" dist/PixelForge/ || true
             done
           done
           cat > dist/PixelForge/run.sh <<'SH'
@@ -78,10 +81,9 @@ jobs:
           exec "$DIR/PixelForge" "$@"
           SH
           chmod +x dist/PixelForge/run.sh
-          mkdir -p dist/PixelForge/plugins
-          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/platforms dist/PixelForge/plugins/ 2>/dev/null || true
-          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/imageformats dist/PixelForge/plugins/ 2>/dev/null || true
-          cp -r /usr/lib/x86_64-linux-gnu/qt6/plugins/iconengines dist/PixelForge/plugins/ 2>/dev/null || true
+          # sanity: no unresolved deps
+          ! ldd dist/PixelForge/PixelForge | grep -q "not found"
+          ! LD_LIBRARY_PATH=dist/PixelForge ldd dist/PixelForge/plugins/platforms/libqxcb.so | grep -q "not found"
           tar -czf PixelForge-linux-x64.tar.gz -C dist PixelForge
 
       - name: Upload app artifact
