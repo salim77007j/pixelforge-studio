@@ -11,6 +11,12 @@
 #include <QKeyEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFileDialog>
+#include <QPushButton>
+#include <QElapsedTimer>
+#include <QSpinBox>
+#include <QComboBox>
+#include <QSlider>
 #include <QJsonArray>
 #include <QDir>
 #include <QTimer>
@@ -58,6 +64,10 @@ static bool imageHasVariance(const QString &path) {
     double mean = sum / n;
     double var = sumsq / n - mean * mean;
     return var > 15.0; // non-trivial content (light UI images have low variance)
+}
+
+static QAction *act2(MainWindow *win, const char *name) {
+    return win->findChild<QAction *>(name);
 }
 
 static int runSelftest(MainWindow &win, const QString &outdir) {
@@ -311,6 +321,40 @@ static int runSelftest(MainWindow &win, const QString &outdir) {
     win.refreshAfterEdit(tab, true);
     QApplication::processEvents();
     grab("13_panels_refreshed.png");
+
+    // --- export dialog UI (real modal flow from the menu command) ---
+    {
+        const QString dlgShot = outdir + "/14_export_dialog_ui.png";
+        QTimer::singleShot(700, [&win, dlgShot]() {
+            for (QDialog *dlg : win.findChildren<QDialog *>()) {
+                if (!dlg->isVisible() || dlg->objectName() == "qt_msg_ext_box") continue;
+                // verify the dialog's controls are real and populated
+                int combos = dlg->findChildren<QComboBox *>().size();
+                int sliders = dlg->findChildren<QSlider *>().size();
+                int spins = dlg->findChildren<QSpinBox *>().size();
+                if (qEnvironmentVariableIsSet("PF_DEBUG"))
+                    fprintf(stderr, "[ST] ExportDialog controls: %d combos, %d sliders, %d spins\n",
+                            combos, sliders, spins);
+                QApplication::processEvents();
+                win.grab().save(dlgShot);
+                bool ok = combos >= 1 && spins >= 1;
+                check(ok, "export dialog controls present");
+                for (QPushButton *b : dlg->findChildren<QPushButton *>())
+                    if (b->text().remove('&').compare("cancel", Qt::CaseInsensitive) == 0
+                        || b->text().remove('&').contains("Cancel")) {
+                        if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] cancelling export dialog\n");
+                        b->click();
+                        return;
+                    }
+            }
+        });
+        if (QAction *a = act2(&win, "cmd_file.export")) a->trigger();
+        QApplication::processEvents();
+        QElapsedTimer t;
+        t.start();
+        while (t.elapsed() < 1600) QApplication::processEvents();
+        check(QFile::exists(dlgShot), "export dialog screenshot captured");
+    }
 
     // --- final composite export of test doc ---
     check(pf_export(tab->m_doc.handle(), (outdir + "/selftest_final.png").toUtf8(), 0, 92, 1, 255, 255, 255, 100) == 0, "final export");

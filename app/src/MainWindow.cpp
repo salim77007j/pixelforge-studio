@@ -836,7 +836,9 @@ void MainWindow::exportImage() {
     uint32_t w, h;
     tab->m_doc.size(w, h);
     ExportDialog dlg(this, w, h);
+    if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] exportImage: opening ExportDialog\n");
     if (dlg.exec() != QDialog::Accepted) return;
+    if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] exportImage: dialog accepted\n");
     QString suggested = tab->title();
     suggested = suggested.remove(QRegularExpression("\\.(ora|png|jpg|jpeg|webp|gif|bmp|tif|tiff|psd|svg)$", QRegularExpression::CaseInsensitiveOption));
     QString ext = QStringLiteral(".png");
@@ -844,12 +846,16 @@ void MainWindow::exportImage() {
     case 1: ext = ".jpg"; break; case 2: ext = ".webp"; break; case 3: ext = ".bmp"; break;
     case 4: ext = ".tif"; break; case 5: ext = ".gif"; break; default: break;
     }
+    if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] exportImage: opening save dialog\n");
     QString path = QFileDialog::getSaveFileName(this, tr("Export As"), suggested + ext,
         tr("Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.gif)"));
+    if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] exportImage: save path='%s'\n", qPrintable(path));
     if (path.isEmpty()) return;
-    if (pf_export(tab->m_doc.handle(), path.toUtf8().constData(), dlg.format(), dlg.quality(),
-                  dlg.lossless() ? 1 : 0, dlg.background().red(), dlg.background().green(),
-                  dlg.background().blue(), dlg.scalePct()) != 0) {
+    int rc = pf_export(tab->m_doc.handle(), path.toUtf8().constData(), dlg.format(), dlg.quality(),
+                       dlg.lossless() ? 1 : 0, dlg.background().red(), dlg.background().green(),
+                       dlg.background().blue(), dlg.scalePct());
+    if (qEnvironmentVariableIsSet("PF_DEBUG")) fprintf(stderr, "[ST] exportImage: pf_export rc=%d\n", rc);
+    if (rc != 0) {
         QMessageBox::warning(this, tr("Export failed"), EngineDoc::lastError());
     } else {
         showStatus(tr("Exported %1").arg(path));
