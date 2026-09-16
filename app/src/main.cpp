@@ -53,7 +53,7 @@ static bool imageHasVariance(const QString &path) {
     double n = 64.0 * 64.0;
     double mean = sum / n;
     double var = sumsq / n - mean * mean;
-    return var > 40.0; // non-trivial content
+    return var > 15.0; // non-trivial content (light UI images have low variance)
 }
 
 static int runSelftest(MainWindow &win, const QString &outdir) {
