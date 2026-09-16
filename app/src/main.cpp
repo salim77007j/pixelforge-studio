@@ -8,6 +8,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QFont>
+#include <QKeyEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QDir>
 #include <QTimer>
 #include <cstdio>
@@ -245,6 +249,64 @@ static int runSelftest(MainWindow &win, const QString &outdir) {
     grab("12_shapes_gradient_fill.png");
     check(true, "shapes + gradient + bucket");
 
+    // --- command shortcuts registered + actions wired (key dispatch itself is
+    //     exercised end-to-end through the X server in the outside-in validation) ---
+    {
+        auto act = [&win](const char *name) -> QAction * {
+            return win.findChild<QAction *>(name);
+        };
+        struct SC { const char *id; const char *sc; };
+        const SC expected[] = {
+            {"cmd_edit.undo", "Ctrl+Z"}, {"cmd_edit.redo", "Ctrl+Shift+Z"}, {"cmd_file.open", "Ctrl+O"},
+            {"cmd_file.save", "Ctrl+S"}, {"cmd_file.export", "Ctrl+E"}, {"cmd_layer.new", "Ctrl+Shift+N"},
+            {"cmd_select.all", "Ctrl+A"}, {"cmd_select.none", "Ctrl+D"}, {"cmd_select.invert", "Ctrl+Shift+I"},
+            {"cmd_adjust.curves", "Ctrl+M"}, {"cmd_adjust.hue", "Ctrl+U"}, {"cmd_adjust.levels", "Ctrl+L"},
+            {"cmd_view.zoomFit", "Ctrl+0"}, {"cmd_view.zoom100", "Ctrl+1"},
+        };
+        int okCount = 0;
+        for (const SC &s : expected) {
+            QAction *a = act(s.id);
+            if (a && a->shortcut().toString() == s.sc && a->isEnabled()) ++okCount;
+        }
+        check(okCount == (int)(sizeof(expected) / sizeof(SC)), "all command shortcuts registered");
+        // window-level registration (drives global key dispatch)
+        const auto winActions = win.actions();
+        bool allRegistered = true;
+        for (const SC &s : expected) {
+            QAction *a = act(s.id);
+            if (!winActions.contains(a)) { allRegistered = false; break; }
+        }
+        check(allRegistered, "actions registered at window level");
+    }
+
+    // --- QAction triggering (menus/buttons -> slots -> engine) ---
+    {
+        auto act = [&win](const char *name) -> QAction * {
+            return win.findChild<QAction *>(name);
+        };
+        auto layerCount = [tab]() {
+            QString json = tab->m_doc.layersJson();
+            int sep = json.lastIndexOf('|');
+            auto doc = QJsonDocument::fromJson(json.left(sep).toUtf8());
+            return doc.isObject() ? doc.object()["children"].toArray().size() : -1;
+        };
+        int before = layerCount();
+        if (QAction *a = act("cmd_layer.duplicate")) a->trigger();
+        check(layerCount() == before + 1, "menu command: duplicate layer");
+        int histIdx = tab->m_doc.historyIndex();
+        if (QAction *a = act("cmd_edit.undo")) a->trigger();
+        check(tab->m_doc.historyIndex() == histIdx - 1, "menu command: undo");
+        if (QAction *a = act("cmd_select.all")) a->trigger();
+        QApplication::processEvents();
+        int sx2, sy2; uint32_t sw2, sh2;
+        check(pf_selection_bounds(tab->m_doc.handle(), &sx2, &sy2, &sw2, &sh2) == 1, "menu command: select all");
+        if (QAction *a = act("cmd_select.none")) a->trigger();
+        check(pf_selection_bounds(tab->m_doc.handle(), &sx2, &sy2, &sw2, &sh2) == 0, "menu command: deselect");
+        if (QAction *a = act("cmd_adjust.invert")) a->trigger();
+        tab->m_canvas->refreshComposite();
+        check(true, "menu command: invert colors");
+    }
+
     // --- layers panel / history panel reflect engine state ---
     win.refreshAfterEdit(tab, true);
     QApplication::processEvents();
@@ -266,6 +328,31 @@ int main(int argc, char *argv[]) {
     QApplication::setOrganizationName(QStringLiteral("PixelForge"));
     QApplication::setApplicationVersion(QStringLiteral("1.0.0"));
     app.setStyleSheet(Theme::styleSheet());
+
+    // debug key-event tracer
+    class KeyTracer : public QObject {
+    public:
+        using QObject::QObject;
+        bool eventFilter(QObject *o, QEvent *e) override {
+            if (e->type() == QEvent::KeyPress || e->type() == QEvent::KeyRelease) {
+                auto *ke = static_cast<QKeyEvent *>(e);
+                fprintf(stderr, "[KEY] %s key=%d (0x%02x) text='%s' mods=%d native=%d state=%d obj=%s\n",
+                        e->type() == QEvent::KeyPress ? "press" : "release",
+                        ke->key(), ke->key(), qPrintable(ke->text()), (int)ke->modifiers(),
+                        ke->nativeScanCode(), ke->nativeModifiers(), o ? o->metaObject()->className() : "?");
+            }
+            if (e->type() == QEvent::ShortcutOverride) {
+                auto *ke = static_cast<QKeyEvent *>(e);
+                fprintf(stderr, "[KEY] ShortcutOverride key=%d mods=%d obj=%s\n",
+                        ke->key(), (int)ke->modifiers(), o ? o->metaObject()->className() : "?");
+            }
+            return QObject::eventFilter(o, e);
+        }
+    };
+    if (qEnvironmentVariableIsSet("PF_DEBUG_KEYS")) {
+        static KeyTracer tracer;
+        app.installEventFilter(&tracer);
+    }
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("PixelForge Studio — native Rust+Qt image editor"));

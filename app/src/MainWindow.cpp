@@ -30,6 +30,7 @@
 #include <QTimer>
 #include <QWidgetAction>
 #include <QActionGroup>
+#include <QShortcut>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QCheckBox>
@@ -70,6 +71,32 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // startup document (no dialog — "New…" menu opens one on demand)
     createUntitled();
     applyShortcuts();
+    if (qEnvironmentVariableIsSet("PF_DEBUG_KEYS")) {
+        // discriminator: bare action (no menu) + plain QShortcut
+        QAction *dbgPlain = new QAction("dbgplain", this);
+        dbgPlain->setShortcut(QKeySequence("X"));
+        connect(dbgPlain, &QAction::triggered, this, []() { fprintf(stderr, "[FIRE] bare QAction plain X\n"); });
+        addAction(dbgPlain);
+        QAction *bare = new QAction("bare", this);
+        bare->setShortcut(QKeySequence("Ctrl+K"));
+        connect(bare, &QAction::triggered, this, []() { fprintf(stderr, "[FIRE] bare QAction Ctrl+K\n"); });
+        addAction(bare);
+        auto *sc = new QShortcut(QKeySequence("Ctrl+Y"), this);
+        connect(sc, &QShortcut::activated, this, []() { fprintf(stderr, "[FIRE] QShortcut Ctrl+Y (activated)\n"); });
+        connect(sc, &QShortcut::activatedAmbiguously, this, []() { fprintf(stderr, "[FIRE] QShortcut Ctrl+Y AMBIGUOUS\n"); });
+        for (auto it = m_cmdActions.begin(); it != m_cmdActions.end(); ++it) {
+            QAction *act = it.value();
+            fprintf(stderr, "[SC] %-22s -> '%s'%s\n", qPrintable(it.key()),
+                    qPrintable(act->shortcut().toString()),
+                    act->isEnabled() ? "" : "  (DISABLED)");
+            connect(act, &QAction::triggered, act, [act]() {
+                fprintf(stderr, "[FIRE] menu action '%s' (%s)\n",
+                        qPrintable(act->objectName()), qPrintable(act->shortcut().toString()));
+            });
+        }
+        for (QAction *a : m_toolActions)
+            fprintf(stderr, "[SC] tool:%-20s -> '%s'\n", qPrintable(a->text()), qPrintable(a->shortcut().toString()));
+    }
 
     QTimer::singleShot(0, this, [this]() {
         m_statusEngine->setText(EngineDoc::rustInfo());
@@ -90,19 +117,23 @@ EditorTab *MainWindow::currentTab() const {
 
 QAction *MainWindow::addCmd(const QString &id, const QString &text, const QKeySequence &def,
                             const char *slot, const QString &menu, QAction::MenuRole) {
-    QAction *a = new QAction(text, this);
+    QMenu *target = nullptr;
+    if (!menu.isEmpty()) {
+        target = menuBar()->findChild<QMenu *>(menu);
+        if (!target) {
+            target = menuBar()->addMenu(menu);
+            target->setObjectName(menu);
+        }
+    }
+    QAction *a = new QAction(text, target ? static_cast<QWidget *>(target) : static_cast<QWidget *>(this));
     a->setObjectName("cmd_" + id);
     a->setProperty("defaultShortcut", def.toString());
-    a->setShortcut(def);
     if (slot) connect(a, SIGNAL(triggered()), this, slot);
-    if (!menu.isEmpty()) {
-        QMenu *m = menuBar()->findChild<QMenu *>(menu);
-        if (!m) {
-            m = menuBar()->addMenu(menu);
-            m->setObjectName(menu);
-        }
-        m->addAction(a);
-    }
+    if (target) target->addAction(a);
+    // Register the shortcut at window level as well — this is what actually
+    // drives global keyboard dispatch for the command, independent of menu state.
+    addAction(a);
+    a->setShortcut(def);
     m_cmdActions[id] = a;
     return a;
 }
