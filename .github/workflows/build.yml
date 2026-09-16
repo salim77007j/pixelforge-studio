@@ -81,9 +81,11 @@ jobs:
           exec "$DIR/PixelForge" "$@"
           SH
           chmod +x dist/PixelForge/run.sh
-          # sanity: no unresolved deps
-          ! ldd dist/PixelForge/PixelForge | grep -q "not found"
-          ! LD_LIBRARY_PATH=dist/PixelForge ldd dist/PixelForge/plugins/platforms/libqxcb.so | grep -q "not found"
+          # sanity: no unresolved deps (with bundle dir on the library path)
+          if LD_LIBRARY_PATH=dist/PixelForge ldd dist/PixelForge/PixelForge | grep -q "not found"; then
+            echo "FATAL: unresolved libs"; LD_LIBRARY_PATH=dist/PixelForge ldd dist/PixelForge/PixelForge | grep "not found"; exit 1; fi
+          if LD_LIBRARY_PATH=dist/PixelForge ldd dist/PixelForge/plugins/platforms/libqxcb.so | grep -q "not found"; then
+            echo "FATAL: unresolved xcb plugin libs"; exit 1; fi
           tar -czf PixelForge-linux-x64.tar.gz -C dist PixelForge
 
       - name: Upload app artifact
